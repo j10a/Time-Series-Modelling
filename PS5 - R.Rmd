@@ -1,0 +1,185 @@
+---
+title: "15.457 - Advanced Analytics Of Finance - Problem Set 5"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+### Importing required libraries and datasets
+
+```{r}
+cpi = read.csv(file = '/Users/jeremyobadia/Desktop/MFin/MIT Spring Term/Advanced Analytics of Finance/Assignments/PS5/CPI.csv')
+
+wmt = read.csv(file = '/Users/jeremyobadia/Desktop/MFin/MIT Spring Term/Advanced Analytics of Finance/Assignments/PS5/WMT.csv')
+
+library(ggplot2)
+library(forecast)
+library(MLmetrics)
+```
+
+## 1. Modelling Inflation
+
+#### a)
+
+```{r}
+prices_index <- cpi$CPIAUCSL
+#head(prices_index, 20)
+n <- length(prices_index)
+lcpi <- log(prices_index[-1]/prices_index[-n])
+lcpi <- c(rep(0, 1), lcpi)
+cpi$lcpi <- lcpi
+cpi$DATE <- as.Date(as.character(cpi$DATE), format = "%Y-%m-%d")
+cpi
+```
+
+```{r}
+plot(x= cpi$DATE,y = cpi$lcpi, type = 'l', ylab = "Inflation", xlab = "Dates", main = "Monthly Inflation Rate π As A Function Of Time")
+
+
+```
+
+#### ACF Plot
+
+```{r}
+
+acf(x = cpi$lcpi, xlab= "Lags", ylab = "ACF", main = "ACF Plot For The Monthly Inflation Rate")
+
+```
+
+#### b)
+```{r}
+ts_inflation <- ts(cpi$lcpi)
+p_bar <- round(1/4*log(length(cpi$lcpi))**2)
+
+aic_list <- list()
+bic_list <- list()
+ll_list <- list()
+
+for(p in 1:p_bar){
+  ar_test <- arima(x= ts_inflation, order = c(p,0,0))
+  aic <- AIC(ar_test)
+  aic_list <- append(aic_list, aic)
+  bic <- BIC(ar_test)
+  bic_list <- append(bic_list, bic)
+  ll <- logLik(ar_test)
+  ll_list <- append(ll_list, ll)
+}
+
+
+
+bic_list <- as.numeric(bic_list)
+aic_list <- as.numeric(aic_list)
+ll_list <- as.numeric(ll_list)
+```
+
+```{r}
+plot(2/n*ll_list - aic_list, ylab= "Log Likelihoof Function - Penalty", xlab= "Values Of p", main = "Values Of Log Likelihoof Function - AIC/BIC As A Function Of p", type="b", pch=19, col="red")
+
+lines(2/n*ll_list - bic_list, pch=18, col="blue", type="b", lty=2)
+
+legend(x = 1, y = 7790, legend=c("AIC Penalty", "BIC Penalty"),
+       col=c("red", "blue"), lty=1:2, cex=0.8)
+
+```
+
+We find that the optimal value of p according to the above plot is 10. Both criteria point us towards this value as the log likelihood function minus the criteria reaches a local maximum for the value p =10.
+
+```{r}
+set.seed(42)
+auto_ar_bic <-auto.arima(ts_inflation,max.p = p_bar,max.d = 0, max.q = 0,ic = "bic",trace = FALSE)
+auto_ar_aic <-auto.arima(ts_inflation,max.p = p_bar,max.d = 0, max.q = 0,ic = "aic",trace = FALSE)
+auto_ar_bic
+auto_ar_aic
+
+```
+
+Here, we find that the optimal value of p according to the BIC criterion is 7, which does not coincide with what we found earlier. One main reason for this could be that the auto.arima function uses approximations to find the best model and the appromixated values for the likelihood functions were very close for p = 10 and p = 7 which may lead to a different optimal parameter than what we found. We find the same value of p as the auto arima function according to the AIC criterion.
+
+
+## 2. Forecasting Corporate Earnings
+
+#### a)
+
+```{r}
+
+wmt$DATE <- as.Date(as.character(wmt$datadate), format = "%Y%m%d")
+
+plot(y = diff(log(wmt$NI)), x = wmt$DATE[-1], type = "l", col = "red", xlab= "Date", ylab = "Delta", main="Time Series Of The First Difference And The Seasonal Difference")
+lines(y = diff(log(wmt$NI), lag = 4), x = wmt$DATE[5:156], type = "l", col="blue")
+legend(x = 12200, y = 0.81, legend=c("Delta t-1", "Delta t-4"),
+       col=c("red", "blue"), lty=1)
+
+```
+
+Comments: On the one hand, we can observe on plot of the first difference that there is seasonality: in the fourth quarter, the net income spikes up which corresponds to a higher revenue in December as we would expect, while the net income drops in the first quarter. Stattistically, this time series seems to exhibit a large serial correlation. On the other hand, on the plot of the seasonal difference, we can observe more accurately the general trend of net income throughout the years. We can observe a sharp decrease around 2008, which corresponds to the global financial crisis and concurs with economic intuition. This time series looks less serially correlated than the first difference one.
+
+#### b)
+
+```{r}
+
+train_wmt <- c(log(wmt[wmt$datadate <20141231,]$NI))
+test_wmt <-  c(log(wmt[wmt$datadate >=20141231,]$NI))
+
+wmt_arima <- Arima(train_wmt,order = c(0,1,1), include.drift = TRUE)
+wmt_arima
+```
+#### c)
+
+```{r}
+fc_list_arima <- list()
+modif_wmt <- train_wmt
+fc_list_arima <- append(fc_list_arima, forecast(wmt_arima, h=1)$mean[1])
+
+
+for(i in 1:16){
+  modif_wmt <- append(modif_wmt, test_wmt[i])
+  model_arima_modif <- Arima(modif_wmt,order = c(0,1,1), include.drift = TRUE)
+  fc_list_arima <- append(fc_list_arima, forecast(model_arima_modif, h=1)$mean[1])
+  
+}
+
+fc_arima <- as.numeric(fc_list_arima)
+cat("The predictions for the arima model are: ",fc_arima)
+```
+
+#### d)
+
+```{r}
+
+airline = arima(train_wmt,order = c(0, 1, 1),seasonal = list(order = c(0, 1, 1),period = 4))
+
+fc_list_airline <- list()
+modif_wmt_airline <- train_wmt
+fc_list_airline <- append(fc_list_airline, forecast(airline, h=1)$mean[1])
+
+
+for(i in 1:16){
+  modif_wmt_airline <- append(modif_wmt_airline, test_wmt[i])
+  model_airline_modif <- arima(modif_wmt_airline,order = c(0, 1, 1),seasonal = list(order = c(0, 1, 1),period = 4))
+  fc_list_airline <- append(fc_list_airline, forecast(model_airline_modif, h=1)$mean[1])
+  
+}
+
+fc_airline <- as.numeric(fc_list_airline)
+cat("The predictions for the airline model are: ",fc_airline)
+
+```
+
+#### e)
+
+```{r}
+
+# We remove the forecast where the actual value is an NaN.
+fc_arima <- fc_arima[-15]
+fc_airline <- fc_airline[-15]
+
+# We compute the MSE
+mse_arima <- MSE(fc_arima, na.omit(test_wmt))
+mse_airline <- MSE(fc_airline, na.omit(test_wmt))
+
+cat("The mean squared error for the airline model is: ", mse_airline,"The mean squared error for the arima model is: ", mse_arima, sep="\n")
+
+```
+
